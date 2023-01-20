@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+
+from urllib.parse import urlparse
+import argparse
+import socket
+import os
+
+# This code is where I establish my argument parser for the command line of the program. It identifies two parameters,
+# an operation parameter where the user will put the operation they want to run on the server, and a params parameter
+# where the user can offer up to two parameters for the program to run through.
+my_parser = argparse.ArgumentParser(description="Communicate with an FTP server")
+my_parser.add_argument("operation", help="The operation being done", type=str)
+my_parser.add_argument("params", help="Parameters for the given operation. Will be one or two paths and/or URLs.",
+                       type=str, nargs='+')
+args = my_parser.parse_args()
+
+operation = args.operation
+params = args.params
+
+# This series of if-statements checks the given parameters to check for a few different things. First, it checks to see
+# if the length of the params parameter is equal to 1, the program knows that the only parameter given, besides the
+# operation parameter, is a an FTP url and can parse it accordingly. Otherwise, the program moves to the next if-
+# statement which checks to see which of the given parameters is the FTP url. Once it identifies the correct parameter,
+# it parses that url and assigns the second parameter in the list to just be a path on the local machine. After the url
+# has been parsed, it assigns specific sections of the url to variables to make their use easier in the later code.
+if len(params) == 2:
+    if "ftp:" in params[0]:
+        parsed_url = urlparse(params[0])
+        username = parsed_url.username
+        password = parsed_url.password
+        host_name = parsed_url.hostname
+        path = parsed_url.path
+        local_path = params[1]
+    else:
+        parsed_url = urlparse(params[1])
+        username = parsed_url.username
+        password = parsed_url.password
+        host_name = parsed_url.hostname
+        path = parsed_url.path
+        local_path = params[0]
+else:
+    parsed_url = urlparse(params[0])
+    username = parsed_url.username
+    password = parsed_url.password
+    host_name = parsed_url.hostname
+    path = parsed_url.path
+
+# These variables represent the basic FTP commands that are needed in order to setup the FTP server before doing any
+# sort of operations. The quit command is also included here as it is used often throughout the code.
+user_command = "USER " + username + "\r\n"
+pass_command = "PASS " + password + "\r\n"
+type_command = "TYPE I\r\n"
+mode_command = "MODE S\r\n"
+stru_command = "STRU F\r\n"
+quit_command = "QUIT\r\n"
+
+# This code is where the socket for the control channel is created. It is automatically told to connect to port 21,
+# unless the FTP url specifies a different port. Once the socket connects to the server, it receives the welcome message
+# from the server and prints it for the user.
+control_channel = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+port = 21
+if parsed_url.port:
+    port = parsed_url.port
+control_channel.connect((host_name, port))
+received_data = control_channel.recv(8224).decode()
+print(received_data)
+
+
+# This function is helper that simply sends an FTP command to through the control channel socket, receives the response,
+# and prints it for the user.
+def send_receive_control(command):
+    control_channel.send(command.encode())
+    received = control_channel.recv(8224).decode()
+    print(received)
+
+
+# This function sends all of the commands needed to set up the FTP server prior to actual use. It employs the use of a
+# helper function to send the commands, receive the response, and print the response message for the user to know what
+# the state of the server is.
+def setup_server():
+    send_receive_control(user_command)
+    send_receive_control(pass_command)
+    send_receive_control(type_command)
+    send_receive_control(mode_command)
+    send_receive_control(stru_command)
+
+
+# This is a helper function that takes in the response given when the data channel is open and gets the port that
+# needs to be used in order for a client to connect to the socket that will be used to make the data channel.
+def get_second_port(passive_string):
+    first_parentheses_remove = passive_string.replace("227 Entering Passive Mode (", "")
+    second_parentheses_remove = first_parentheses_remove.replace(").", "")
+    list_of_ints = list(map(int, second_parentheses_remove.split(",")))
+    top_bit, bottom_bit = list_of_ints[4], list_of_ints[5]
+    second_port = top_bit << 8 | bottom_bit
+    return second_port
+
+
+# This is a helper function that takes in the response given when the data channel is open and gets the IP address that
+# needs to be used in order for a client to connect to the socket that will be used to make the data channel.
+def get_ip_address(passive_string):
+    first_parentheses_remove = passive_string.replace("227 Entering Passive Mode (", "")
+    second_parentheses_remove = first_parentheses_remove.replace(").", "")
+    list_of_ints = second_parentheses_remove.split(",")
+    ip = list_of_ints[0] + "." + list_of_ints[1] + "." + list_of_ints[2] + "." + list_of_ints[3]
+    return ip
+
+
+# This is a helper function that takes the socket used for the data channel and then sends the LIST FTP command to the
+# server, receives the data as necessary, and then quits out of the server.
+def ls_command(data_socket):
+    list_command = "LIST " + path + "\r\n"
+    control_channel.send(list_command.encode())
+    received = data_socket.recv(8224).decode()
+    print(received)
+    control_channel.recv(8224).decode()
+    send_receive_control(quit_command)
+
+
+# This is a helper function that takes in the socket used for the data channel and handles all operations that require
+# the client to upload something to the server i.e. when the STOR command is being sent to the FTP server. This gives
+# the client the path that the file from the local machine will be uploaded to on the server and then closes the data
+# socket once all needed operations have been done.
+def upload_to_ftp(data_socket):
+    store_command = "STOR " + path + "\r\n"
+    control_channel.send(store_command.encode())
+    received = control_channel.recv(8100).decode()
+    print(received)
+    with open(local_path, "rb") as f:
+        file = f.read()
+    f.close()
+    data_socket.send(file)
+    data_socket.close()
+    received = control_channel.recv(8100).decode()
+    print(received)
+
+
+# This is a helper function that takes in the socket used for the data channel and handles all operations that require
+# the client to download something from the server i.e. when the RETR command is being sent ti the FTP server. This
+# takes the file from the server that is being either copied or moved onto the local machine and sends it to the client
+# so that a file on the local machine can be properly created.
+def download_from_ftp(data_socket):
+    return_command = "RETR " + path + "\r\n"
+    control_channel.send(return_command.encode())
+    control_channel.recv(8100).decode()
+    received = data_socket.recv(8224)
+    control_channel.recv(8100).decode()
+    with open(local_path, 'wb') as file:
+        file.write(received)
+    data_socket.close()
+
+
+# This function is where all things needed to open the data channel are done. The function first sends the PASV command
+# to the FTP server so that it can receive the message that contains the IP address and port needed for a socket to
+# connect to so the data channel can be created. Once the data channel socket has connect, the function then checks to
+# which operation requiring the data channel to open is being run (ls, cp, or mv). Once the operation has been
+# identified, the program then runs the respective helper function needed to complete the operation.
+def passive_command():
+    pasv_command = "PASV\r\n"
+    control_channel.send(pasv_command.encode())
+    received = control_channel.recv(8224).decode()
+    print(received)
+    second_port = get_second_port(received)
+    ip = get_ip_address(received)
+    data_channel = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    data_channel.connect((ip, second_port))
+    if operation == "ls":
+        ls_command(data_channel)
+    elif operation == "cp" and "ftp:" in params[1]:
+        upload_to_ftp(data_channel)
+        send_receive_control(quit_command)
+    elif operation == "cp" and "ftp:" in params[0]:
+        download_from_ftp(data_channel)
+        send_receive_control(quit_command)
+    elif operation == "mv" and "ftp:" in params[1]:
+        upload_to_ftp(data_channel)
+        os.remove(local_path)
+        send_receive_control(quit_command)
+    elif operation == "mv" and "ftp:" in params[0]:
+        download_from_ftp(data_channel)
+        delete_command()
+        send_receive_control(quit_command)
+
+
+# This is a helper function that assigns the DELE FTP command to a variable and then gives that command to the
+# send_receive_control function so that it can send the command, receive the response, and print the response.
+def delete_command():
+    dele_command = "DELE " + path + "\r\n"
+    send_receive_control(dele_command)
+
+
+# This is a helper function that assigns the MKD FTP command to a variable and then gives that command to the
+# send_receive_control function so that it can send the command, receive the response, and print the response.
+def mkdir_command():
+    mkd_command = "MKD " + path + "\r\n"
+    send_receive_control(mkd_command)
+
+
+# This is a helper function that assigns the RMD FTP command to a variable and then gives that command to the
+# send_receive_control function so that it can send the command, receive the response, and print the response.
+def rmdir_command():
+    rmd_command = "RMD " + path + "\r\n"
+    send_receive_control(rmd_command)
+
+
+# This line runs the setup_server function so that all the necessary commands are sent to the server that are needed in
+# order to allow the operations to run.
+setup_server()
+
+# This if-statement checks to see if the operation that the client wants to run is one of the ones that requires a data
+# channel to be open.
+if operation == "ls" or "mv" or "cp":
+    passive_command()
+
+# This if-statement checks to see if the operation that the client want to run is "mkdir" which is the operation to make
+# a directory.
+if operation == "mkdir":
+    mkdir_command()
+    send_receive_control(quit_command)
+
+# This if-statement checks to see if the operation that the client want to run is "rmdir" which is the operation to
+# remove a directory.
+if operation == "rmdir":
+    rmdir_command()
+    send_receive_control(quit_command)
+
+# This if-statement checks to see if the operation that the client want to run is "rm" which is the operation to remove
+# a file.
+if operation == "rm":
+    delete_command()
+    send_receive_control(quit_command)
