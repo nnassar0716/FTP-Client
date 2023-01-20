@@ -1,7 +1,7 @@
 #**README**
-###Nathan Nassar
 
-##High Level Approach
+
+##High Level Approach:
 My approach when completing this assignment was very similar to 
 the suggested implementation approach that was given to us in the 
 details for the project. I first did research to learn how to use
@@ -21,7 +21,7 @@ onto using the FTP commands that require a data connection to
 support the use of the last operations needed. I then organized all
 of my code into functions and helper functions and was finished.
 
-##Challenges Faced
+##Challenges Faced:
 The biggest challenges I faced during this assignment occured when
 I began to work with the aspects of the assignment that required
 the use of a data channel. I first had to figure out how to 
@@ -37,7 +37,7 @@ channel proved to be a challenging task for me. Once I got over
 the hurdle of learning how to properly communicate with the 
 server, I was able to properly implement all operations necessary.
 
-##Overview of Testing
+##Overview of Testing:
 I tested my code largely by making use of print statements and through 
 the use of FileZilla in order to see the FTP server through 
 the lens of a gui. Initially, printing out the responses I 
